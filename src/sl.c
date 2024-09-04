@@ -12,6 +12,7 @@
 #define sal_error_msg(fmt,...) eprintf(__FILE__ ":%d: " fmt, __LINE__, ##__VA_ARGS__)
 #define assert(expr,...) if(!(expr)) { sal_error_msg("failed assertion: %s\n", #expr); FAIL }
 #define MAX_LINE 256
+#define MAX_ARGS 256
 #define MAX_MACRO_NAME 64
 #define MAX_MACROS 1024
 
@@ -26,11 +27,13 @@ typedef struct string {
 
 typedef struct macro {
         sl_string name;
-        void (*replace)(FILE*);
+        void (*replace)(FILE*, int argc, char** argv);
 } macro;
 macro macro_list[MAX_MACROS];
 
-#define str_to_cstr()
+int send_argc;
+char send_argv_buffer[MAX_ARGS][MAX_LINE];
+char* send_argv[MAX_ARGS];
 
 int main(int argc, char** argv)
 #define FAIL return EXIT_FAILURE;
@@ -61,7 +64,7 @@ int main(int argc, char** argv)
                                 assert(fclose(temp) == EXIT_SUCCESS)
                                 pid_t p=fork();
                                 if (p == 0) {
-                                        execvp("gcc", (char*[MAX_LINE]){"gcc", "-shared", temp_name.data, "-o", tempso_name.data});
+                                        execvp("gcc", (char*[MAX_LINE]){"gcc", "-g", "-fPIC", "-shared", temp_name.data, "-o", tempso_name.data});
                                 }
                                 wait(NULL);
                                 void* shared_object_handle=dlopen(tempso_name.data, RTLD_NOW);
@@ -93,8 +96,21 @@ int main(int argc, char** argv)
                         if (macro_list_len > 0) for (int mli=0; mli < macro_list_len; mli++) {
                                 macro* mp=&macro_list[mli];
                                 if (i + mp->name.len < MAX_LINE && strncmp(mp->name.data, line+i, mp->name.len) == 0) {
-                                        mp->replace(out);
+                                        assert(strncpy(send_argv_buffer[0], mp->name.data, MAX_LINE) == send_argv_buffer[0]);
                                         i += mp->name.len;
+                                        send_argc=1;
+                                        send_argv[0]=send_argv_buffer[0];
+                                        while (line[i] != '\n') {
+                                                while(iswspace(line[i])) i++;
+                                                int k=0;
+                                                for(; !iswspace(line[i]); i++, k++) {
+                                                        send_argv_buffer[send_argc][k]=line[i];
+                                                }
+                                                send_argv_buffer[send_argc][k]='\0';
+                                                send_argv[send_argc]=send_argv_buffer[send_argc];
+                                                send_argc++;
+                                        }
+                                        mp->replace(out, send_argc, send_argv);
                                 }
                         }
                         putc(line[i], out);
