@@ -1,5 +1,4 @@
 ## print_hello_world
-
 #include <stdio.h>
 #include <stdlib.h>
 int replace(FILE* out) {
@@ -10,7 +9,16 @@ int replace(FILE* out) {
         fprintf(out, "\tsyscall\n");
         return EXIT_SUCCESS;
 }
-
+##
+## exit
+#include <stdio.h>
+#include <stdlib.h>
+int replace(FILE* out) {
+        fprintf(out, "movq\t$60, %%rax\n");
+        fprintf(out, "\txor\t%%rdi, %%rdi\n");
+        fprintf(out, "\tsyscall\n");
+        return EXIT_SUCCESS;
+}
 ##
 	.data
 hello_world:
@@ -22,8 +30,5 @@ _start:
         print_hello_world
         print_hello_world
         print_hello_world
-
-        movq    $60, %rax
-        xor     %rdi, %rdi
-        syscall
+        exit
 
