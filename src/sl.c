@@ -35,6 +35,91 @@ int send_argc;
 char send_argv_buffer[MAX_ARGS][MAX_LINE];
 char* send_argv[MAX_ARGS];
 
+int sl_load_macro_args(macro* mp, char* line, int start)
+#define FAIL return -1;
+{
+        int i=start;
+        assert(strncpy(send_argv_buffer[0], mp->name.data, MAX_LINE) == send_argv_buffer[0]);
+        i += mp->name.len;
+        send_argc=1;
+        send_argv[0]=send_argv_buffer[0];
+        while (line[i] != '\n') {
+                while(iswspace(line[i])) i++;
+                int k=0;
+                for(; !iswspace(line[i]); i++, k++) {
+                        send_argv_buffer[send_argc][k]=line[i];
+                }
+                send_argv_buffer[send_argc][k]='\0';
+                send_argv[send_argc]=send_argv_buffer[send_argc];
+                send_argc++;
+        }
+        return i;
+}
+#undef FAIL
+
+int sl_process_line (FILE* out, char* line) {
+#define FAIL return EXIT_FAILURE;
+        // Match lines starting with ## as macro definitions
+        for (int i=0; i < MAX_LINE && line[i] != '\0'; i++) {
+                // If there is a macro, check if line matches macro
+                if (macro_list_len > 0) for (int mli=0; mli < macro_list_len; mli++) {
+                        macro* mp=&macro_list[mli];
+                        if (i + mp->name.len < MAX_LINE && strncmp(mp->name.data, line+i, mp->name.len) == 0) {
+                                i=sl_load_macro_args(mp, line, i);
+                                assert(i >= 0);
+                                mp->replace(out, send_argc, send_argv);
+                        }
+                }
+                putc(line[i], out);
+        }
+        return EXIT_SUCCESS;
+}
+#undef FAIL
+
+int sl_read_macro(FILE* src, char* line)
+#define FAIL return EXIT_FAILURE;
+{
+        sl_string temp_name;
+        FILE* temp;
+        {
+                int i=1;
+                // Create macro
+                macro* mp=&macro_list[macro_list_len++];
+                // Copy macro name
+                while (iswspace(line[++i]));
+                int j=0;
+                while (isalnum(line[i]) || line[i] == '_') {
+                        mp->name.data[j++]=line[i++];
+                }
+                mp->name.len=j;
+                // Open macro temp file
+                temp_name.len=sprintf(temp_name.data, "/tmp/sl/%s.c", mp->name.data);
+                temp=fopen(temp_name.data, "w");
+                assert(temp != NULL)
+        }
+        while (fgets(line, MAX_LINE-1, src) != NULL) {
+                if (line[0] == '#' && line[1] == '#') {
+                        macro* mp=&macro_list[macro_list_len-1];
+                        sl_string tempso_name;
+                        tempso_name.len=sprintf(tempso_name.data, "/tmp/sl/%s.so", mp->name.data);
+
+                        assert(fclose(temp) == EXIT_SUCCESS)
+                        pid_t p=fork();
+                        if (p == 0) {
+                                execvp("gcc", (char*[MAX_LINE]){"gcc", "-g", "-fPIC", "-shared", temp_name.data, "-o", tempso_name.data});
+                        }
+                        wait(NULL);
+                        void* shared_object_handle=dlopen(tempso_name.data, RTLD_NOW);
+                        assert(shared_object_handle != NULL);
+                        mp->replace=dlsym(shared_object_handle, "replace");
+                        assert(mp->replace != NULL);
+                        return EXIT_SUCCESS;
+                }
+                fputs(line, temp);
+        }
+}
+#undef FAIL
+
 int main(int argc, char** argv)
 #define FAIL return EXIT_FAILURE;
 {
@@ -47,75 +132,13 @@ int main(int argc, char** argv)
         FILE* out=fopen("/tmp/sl/out.s", "w");
         assert(in != NULL)
         assert(out != NULL)
-        char line[MAX_LINE];
-        int cpy_into_temp=0;
 
-        sl_string temp_name;
-        FILE* temp;
+        char line[MAX_LINE];
         // Find a macro, copy its code into a c file
         while (fgets(line, MAX_LINE-1, in) != NULL) {
                 // Match lines starting with ## as macro definitions
-                int i=0; if (line[i] == '#' && line[++i] == '#') {
-                        if (cpy_into_temp) {
-                                macro* mp=&macro_list[macro_list_len-1];
-                                sl_string tempso_name;
-                                tempso_name.len=sprintf(tempso_name.data, "/tmp/sl/%s.so", mp->name.data);
-
-                                assert(fclose(temp) == EXIT_SUCCESS)
-                                pid_t p=fork();
-                                if (p == 0) {
-                                        execvp("gcc", (char*[MAX_LINE]){"gcc", "-g", "-fPIC", "-shared", temp_name.data, "-o", tempso_name.data});
-                                }
-                                wait(NULL);
-                                void* shared_object_handle=dlopen(tempso_name.data, RTLD_NOW);
-                                assert(shared_object_handle != NULL);
-                                mp->replace=dlsym(shared_object_handle, "replace");
-                                assert(mp->replace != NULL);
-                                cpy_into_temp=0;
-                                continue;
-                        } else {
-                                // Create macro
-                                macro* mp=&macro_list[macro_list_len++];
-                                // Copy macro name
-                                while (iswspace(line[++i]));
-                                int j=0;
-                                while (isalnum(line[i]) || line[i] == '_') {
-                                        mp->name.data[j++]=line[i++];
-                                }
-                                mp->name.len=j;
-                                // Open macro temp file
-                                temp_name.len=sprintf(temp_name.data, "/tmp/sl/%s.c", mp->name.data);
-                                temp=fopen(temp_name.data, "w");
-                                assert(temp != NULL)
-                                cpy_into_temp=1;
-                        }
-                } else if (cpy_into_temp) {
-                        fputs(line, temp);
-                } else for (int i=0; i < MAX_LINE && line[i] != '\0'; i++) {
-                        // If there is a macro, check if line matches macro
-                        if (macro_list_len > 0) for (int mli=0; mli < macro_list_len; mli++) {
-                                macro* mp=&macro_list[mli];
-                                if (i + mp->name.len < MAX_LINE && strncmp(mp->name.data, line+i, mp->name.len) == 0) {
-                                        assert(strncpy(send_argv_buffer[0], mp->name.data, MAX_LINE) == send_argv_buffer[0]);
-                                        i += mp->name.len;
-                                        send_argc=1;
-                                        send_argv[0]=send_argv_buffer[0];
-                                        while (line[i] != '\n') {
-                                                while(iswspace(line[i])) i++;
-                                                int k=0;
-                                                for(; !iswspace(line[i]); i++, k++) {
-                                                        send_argv_buffer[send_argc][k]=line[i];
-                                                }
-                                                send_argv_buffer[send_argc][k]='\0';
-                                                send_argv[send_argc]=send_argv_buffer[send_argc];
-                                                send_argc++;
-                                        }
-                                        mp->replace(out, send_argc, send_argv);
-                                }
-                        }
-                        putc(line[i], out);
-                }
-
+                if (line[0] == '#' && line[1] == '#') { sl_read_macro(in, line); }
+                else assert(sl_process_line(out, line) == EXIT_SUCCESS);
         }
         assert(fclose(out) == EXIT_SUCCESS)
         pid_t p=fork();
