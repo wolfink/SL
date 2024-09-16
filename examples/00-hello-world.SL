@@ -1,6 +1,10 @@
 load "00-include.SL"
-enter
-echo Hello, world!
-echo nowhere   (hello)
-echo a b c
-exit
+
+def _start
+        echo Hello, world!
+        echo nowhere   (hello)
+        echo a b c
+        xor %rdi, %rdi
+        call _exit
+def _exit
+        exit

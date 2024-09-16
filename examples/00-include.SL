@@ -1,10 +1,11 @@
-## enter
+## def
 #include <stdio.h>
 #include <stdlib.h>
 int replace(FILE* out, int argc, char** argv) {
-        fprintf(out, "\t.globl\t_start\n");
-        fprintf(out, "\t.type\t_start,@function\n");
-        fprintf(out, "_start:\n");
+        if (argc < 2) return EXIT_FAILURE;
+        fprintf(out, "\t.globl\t%s\n", argv[1]);
+        fprintf(out, "\t.type\t%s,@function\n", argv[1]);
+        fprintf(out, "%s:\n", argv[1]);
         return EXIT_SUCCESS;
 }
 ##
@@ -37,7 +38,6 @@ int replace(FILE* out, int argc, char** argv) {
 #include <stdlib.h>
 int replace(FILE* out, int argc, char** argv) {
         fprintf(out, "\tmovq\t$60, %%rax\n");
-        fprintf(out, "\txor\t%%rdi, %%rdi\n");
         fprintf(out, "\tsyscall\n");
         return EXIT_SUCCESS;
 }

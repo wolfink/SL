@@ -28,7 +28,8 @@ typedef struct string {
 
 typedef struct macro {
         sl_string name;
-        void (*replace)(FILE*, int argc, char** argv);
+        int (*prologue)();
+        int (*replace)(FILE*, int argc, char** argv);
 } macro;
 macro macro_list[MAX_MACROS];
 
@@ -41,7 +42,7 @@ char* tmp_dir=NULL;
 /* Generate assembly from SL code. */
 void* sl_generate(void*);
 /* Loads a macro function call into send_argc and send_argv. */
-int sl_load_macro_args(macro* mp, char* line, int start);
+int sl_load_macro_args(macro* mp, char* line);
 /* Processes a line of input. */
 int sl_process_line (FILE* out, char* line);
 /* Create a folder with subfolders. */
@@ -116,43 +117,42 @@ int sl_install(char* directory, __mode_t mode)
 }
 #undef FAIL
 
-int sl_load_macro_args(macro* mp, char* line, int start)
-#define FAIL return -1;
+int sl_load_macro_args(macro* mp, char* line)
+#define FAIL return EXIT_FAILURE;
 {
-        int i=start;
         assert(strncpy(send_argv_buffer[0], mp->name.data, MAX_LINE) == send_argv_buffer[0]);
-        i += mp->name.len;
         send_argc=1;
         send_argv[0]=send_argv_buffer[0];
-        while (line[i] != '\n') {
-                while(iswspace(line[i])) i++;
-                int k=0;
-                for(; !iswspace(line[i]); i++, k++) {
-                        send_argv_buffer[send_argc][k]=line[i];
-                }
-                send_argv_buffer[send_argc][k]='\0';
-                send_argv[send_argc]=send_argv_buffer[send_argc];
+        char* arg;
+        while ((arg=strtok(NULL, " \n")) != NULL) {
+                send_argv[send_argc]=arg;
                 send_argc++;
         }
-        return i;
+        return EXIT_SUCCESS;
 }
 #undef FAIL
 
 int sl_process_line (FILE* out, char* line) {
 #define FAIL return EXIT_FAILURE;
-        // Match lines starting with ## as macro definitions
-        for (int i=0; i < MAX_LINE && line[i] != '\0'; i++) {
-                // If there is a macro, check if line matches macro
+        char* word=strtok(line, " \n");
+        if (word == NULL) return EXIT_SUCCESS;
+        do {
+                unsigned long wordlen=strlen(word);
+                // If there is a macro, check if word matches macro
                 if (macro_list_len > 0) for (int mli=0; mli < macro_list_len; mli++) {
                         macro* mp=&macro_list[mli];
-                        if (i + mp->name.len < MAX_LINE && strncmp(mp->name.data, line+i, mp->name.len) == 0) {
-                                i=sl_load_macro_args(mp, line, i);
-                                assert(i >= 0);
-                                mp->replace(out, send_argc, send_argv);
+                        if (strncmp(mp->name.data, word, wordlen) == 0) {
+                                assert(sl_load_macro_args(mp, line) == EXIT_SUCCESS);
+                                assert(mp->replace(out, send_argc, send_argv) == EXIT_SUCCESS);
+                                return EXIT_SUCCESS;
                         }
                 }
-                putc(line[i], out);
-        }
+                // If no macros are matched, put word, with a space
+                fputs(word, out);
+                putc(' ', out);
+        } while ((word=strtok(NULL, " \n")) != NULL);
+        putc('\n', out);
+
         return EXIT_SUCCESS;
 }
 #undef FAIL
