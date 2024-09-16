@@ -8,10 +8,12 @@
 #include <sys/stat.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <assert.h>
+#include <errno.h>
 
 #define eprintf(fmt,...) fprintf(stderr, fmt, ##__VA_ARGS__)
-#define sal_error_msg(fmt,...) eprintf(__FILE__ ":%d: " fmt, __LINE__, ##__VA_ARGS__)
-#define assert(expr,...) if(!(expr)) { sal_error_msg("failed assertion: %s\n", #expr); __VA_ARGS__ FAIL }
+#define sl_error_msg(fmt,...) eprintf(__FILE__ ":%d: " fmt "\n", __LINE__, ##__VA_ARGS__)
+#define sl_handle_err(expr,...) if(expr) { __VA_ARGS__ FAIL }
 #define MAX_LINE 256
 #define MAX_ARGS 256
 #define MAX_MACRO_NAME 64
@@ -55,31 +57,39 @@ inline int sl_skip_whitespace(char* line, int start);
 void* sl_generate(void* vargp)
 #define FAIL return NULL;
 {
-        assert(vargp != NULL)
+        assert(vargp != NULL);
+
         char* filename=vargp;
         FILE* in=fopen(filename, "r");
+        sl_handle_err(in == NULL,
+                sl_error_msg("failed to open %s: %s", filename, strerror(errno));)
         sl_string tmp_filedir;
         char* filename_no_ext=strtok(filename, ".");
-        assert(filename_no_ext != NULL)
+        sl_handle_err (filename_no_ext == NULL,
+                sl_error_msg("filename has no body");)
         tmp_filedir.len=sprintf((char*) &tmp_filedir, "/tmp/sl/%s", filename_no_ext);
         // Install tmp directories
-        assert(sl_install((char*) &tmp_filedir, 0700) == EXIT_SUCCESS);
+        sl_handle_err(sl_install((char*) &tmp_filedir, 0700) == EXIT_FAILURE,
+                sl_error_msg("could not install %s", (char*) &tmp_filedir);)
         sl_string outfile_name;
         outfile_name.len=sprintf((char*) &outfile_name, "%s/out.s", tmp_filedir.data);
         FILE* out=fopen((char*) &outfile_name, "w");
-        assert(in != NULL)
-        assert(out != NULL)
+        sl_handle_err(out == NULL,
+                sl_error_msg("failed to open %s: %s", (char*) &outfile_name, strerror(errno));)
 
         char line[MAX_LINE];
         // Find a macro, copy its code into a c file
         while (fgets(line, MAX_LINE-1, in) != NULL) {
                 tmp_dir=tmp_filedir.data;
                 // Match lines starting with ## as macro definitions
-                if (line[0] == '#' && line[1] == '#') { assert(sl_read_macro(in, line) == EXIT_SUCCESS); }
+                if (line[0] == '#' && line[1] == '#') {
+                        sl_handle_err(sl_read_macro(in, line),
+                                sl_error_msg("failed to read macro");)
+                }
                 // Match lines that start with "load" as macro loading
                 else if (strncmp(line, "load", 4) == 0) {
                         int i=sl_skip_whitespace(line, 4);
-                        assert(line[i] == '\"');
+                        sl_handle_err(line[i] != '\"', sl_error_msg("expected \'\"\'");)
                         char* load_filename=strtok(line + i + 1, "\"");
                         sl_string load_file;
                         sl_string dir;
@@ -88,14 +98,13 @@ void* sl_generate(void* vargp)
                         int last_slash=0;
                         for (int j=0; j < dir.len && dir.data[j] != '/'; j++, last_slash++);
                         dir.data[last_slash]='\0';
-                        load_file.len=sprintf((char*) &load_file, "%s/%s", dir.data, load_filename);
-                        assert(load_file.data != NULL)
+                        load_file.len=sprintf((char*) &load_file, "%s/%s", (char*) &dir, load_filename);
                         pthread_t thread_id;
-                        assert(pthread_create(&thread_id, NULL, sl_generate, &load_file) == EXIT_SUCCESS);
-                        assert(pthread_join(thread_id, NULL) == EXIT_SUCCESS);
+                        sl_handle_err(pthread_create(&thread_id, NULL, sl_generate, &load_file))
+                        sl_handle_err(pthread_join(thread_id, NULL));
                 } else assert(sl_process_line(out, line) == EXIT_SUCCESS);
         }
-        assert(fclose(out) == EXIT_SUCCESS)
+        sl_handle_err(fclose(out), sl_error_msg("fclose failed: %s", strerror(errno));)
         return vargp;
 }
 #undef FAIL
@@ -103,16 +112,22 @@ void* sl_generate(void* vargp)
 int sl_install(char* directory, __mode_t mode)
 #define FAIL return EXIT_FAILURE;
 {
+        assert(directory != NULL);
+
         for (int i=0; directory[i] != '\0'; i++) {
                 if (directory[i] == '/' && i > 0) {
                         directory[i] = '\0';
-                        if (stat(directory, &st) == -1) assert(mkdir(directory, mode) == EXIT_SUCCESS,
-                                printf("directory=%s, i=%d\n", directory, i);)
+                        if (stat(directory, &st) == -1) {
+                                sl_handle_err(mkdir(directory, mode),
+                                        sl_error_msg("failed to create directory %s: %s\n", directory, strerror(errno));)
+                        }
                         directory[i]='/';
                 }
         }
-        if (stat(directory, &st) == -1) assert(mkdir(directory, mode) == EXIT_SUCCESS,
-                printf("directory=%s\n", directory);)
+        if (stat(directory, &st) == -1) {
+                sl_handle_err(mkdir(directory, mode),
+                        sl_error_msg("failed to create directory %s: %s\n", directory, strerror(errno));)
+        }
         return EXIT_SUCCESS;
 }
 #undef FAIL
@@ -120,20 +135,23 @@ int sl_install(char* directory, __mode_t mode)
 int sl_load_macro_args(macro* mp, char* line)
 #define FAIL return EXIT_FAILURE;
 {
-        assert(strncpy(send_argv_buffer[0], mp->name.data, MAX_LINE) == send_argv_buffer[0]);
-        send_argc=1;
-        send_argv[0]=send_argv_buffer[0];
-        char* arg;
-        while ((arg=strtok(NULL, " \n")) != NULL) {
-                send_argv[send_argc]=arg;
-                send_argc++;
-        }
+        assert(mp != NULL);
+        assert(line != NULL);
+
+        send_argc=0;
+        char* arg=line;
+        do send_argv[send_argc++]=arg;
+        while ((arg=strtok(NULL, " \n")) != NULL);
         return EXIT_SUCCESS;
 }
 #undef FAIL
 
-int sl_process_line (FILE* out, char* line) {
+int sl_process_line (FILE* out, char* line)
 #define FAIL return EXIT_FAILURE;
+{
+        assert(out != NULL);
+        assert(line != NULL);
+
         char* word=strtok(line, " \n");
         if (word == NULL) return EXIT_SUCCESS;
         do {
@@ -142,8 +160,16 @@ int sl_process_line (FILE* out, char* line) {
                 if (macro_list_len > 0) for (int mli=0; mli < macro_list_len; mli++) {
                         macro* mp=&macro_list[mli];
                         if (strncmp(mp->name.data, word, wordlen) == 0) {
-                                assert(sl_load_macro_args(mp, line) == EXIT_SUCCESS);
-                                assert(mp->replace(out, send_argc, send_argv) == EXIT_SUCCESS);
+                                // Put macro expansion into temporary file, to be read and further expanded
+                                //FILE* tmp=fopen("/tmp/sl/tmp.SL", "w");
+                                sl_handle_err(sl_load_macro_args(mp, line),
+                                        sl_error_msg("failed to load macro args");)
+                                sl_handle_err(mp->replace(out, send_argc, send_argv),
+                                        sl_error_msg("replace failed for %s", (char*) &mp->name);
+                                        eprintf("Arguments:\n");
+                                        for (int i=0; i < send_argc; i++) {
+                                                eprintf("  (%d) %s\n", i, send_argv[i]);
+                                        })
                                 return EXIT_SUCCESS;
                         }
                 }
@@ -160,7 +186,10 @@ int sl_process_line (FILE* out, char* line) {
 int sl_read_macro(FILE* src, char* line)
 #define FAIL return EXIT_FAILURE;
 {
-        assert(tmp_dir != NULL)
+        assert(src != NULL);
+        assert(line != NULL);
+        assert(tmp_dir != NULL);
+
         sl_string temp_name;
         FILE* temp;
         // Create macro
@@ -175,23 +204,23 @@ int sl_read_macro(FILE* src, char* line)
         // Open macro temp file
         temp_name.len=sprintf(temp_name.data, "%s/%s.c", tmp_dir, mp->name.data);
         temp=fopen(temp_name.data, "w");
-        assert(temp != NULL)
+        sl_handle_err(temp == NULL)
         while (fgets(line, MAX_LINE-1, src) != NULL) {
                 if (line[0] == '#' && line[1] == '#') {
                         macro* mp=&macro_list[macro_list_len-1];
                         sl_string tempso_name;
                         tempso_name.len=sprintf(tempso_name.data, "%s/%s.so", tmp_dir, mp->name.data);
 
-                        assert(fclose(temp) == EXIT_SUCCESS)
+                        sl_handle_err(fclose(temp))
                         pid_t p=fork();
                         if (p == 0) {
                                 execvp("gcc", (char*[MAX_LINE]){"gcc", "-g", "-fPIC", "-shared", temp_name.data, "-o", tempso_name.data});
                         }
                         wait(NULL);
-                        void* shared_object_handle=dlopen(tempso_name.data, RTLD_NOW);
-                        assert(shared_object_handle != NULL);
+                        void* shared_object_handle=dlopen((char*) &tempso_name, RTLD_NOW);
+                        sl_handle_err(shared_object_handle == NULL, sl_error_msg("%s failed to open", (char*) &tempso_name);)
                         mp->replace=dlsym(shared_object_handle, "replace");
-                        assert(mp->replace != NULL);
+                        sl_handle_err(mp->replace == NULL, sl_error_msg("\"replace\" label not found");)
                         return EXIT_SUCCESS;
                 }
                 fputs(line, temp);
@@ -208,12 +237,19 @@ int sl_skip_whitespace(char* line, int start)
         return i;
 }
 
+void usage()
+{
+        printf("usage: sl file1 [file2] ...\n");
+        exit(EXIT_FAILURE);
+}
+
 int main(int argc, char** argv)
 #define FAIL return EXIT_FAILURE;
 {
-        assert(argc > 1)
-        assert(sl_generate(argv[1]) != NULL)
-        assert(tmp_dir != NULL)
+        sl_handle_err(argc < 2, usage();)
+        sl_handle_err(sl_generate(argv[1]) == NULL,
+                sl_error_msg("failed to generate %s", argv[1]);)
+        sl_handle_err(tmp_dir == NULL)
         sl_string as_file;
         sl_string o_file;
         as_file.len=sprintf(as_file.data, "%s/out.s", tmp_dir);
@@ -222,7 +258,7 @@ int main(int argc, char** argv)
         if (p == 0) {
                 execvp("as", (char*[MAX_LINE]){"as", as_file.data, "-o", o_file.data});
         }
-        assert(wait(NULL) != -1);
+        sl_handle_err(wait(NULL) == -1, sl_error_msg("child process failed");)
         execvp("ld", (char*[MAX_LINE]){"ld", o_file.data, "-o", "a.out"});
 }
 #undef FAIL
