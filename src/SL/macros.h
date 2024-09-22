@@ -11,7 +11,7 @@
 #define cstr_gt(a,b) strcmp(a,b) > 0
 
 #define eprintf(fmt,...) fprintf(stderr, fmt, ##__VA_ARGS__)
-#define sl_error_msg(fmt,...) eprintf(__FILE__ ":%d: " fmt "\n", __LINE__, ##__VA_ARGS__)
+#define sl_error_msg(fmt,...) eprintf(__FILE__ ":%d: %s: " fmt "\n", __LINE__, __PRETTY_FUNCTION__, ##__VA_ARGS__)
 #define sl_handle_err(expr,...) if(expr) { __VA_ARGS__ FAIL }
 #define verbose_printf(fmt,...) (FLAGS & 1)? printf(fmt, ##__VA_ARGS__ ):0;
 
