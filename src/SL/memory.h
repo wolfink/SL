@@ -19,7 +19,7 @@ typedef struct sl_string {
 typedef struct sl_string_view {
         u64 len;
         cstring data_addr;
-} sl_string_view;
+}* sl_string_view;
 
 #else
 
@@ -87,18 +87,15 @@ typedef struct sl_string_builder {
 //////////////////////////////////////////////////
 
 #define decl_sl_vector_new(type)\
-errcode sl_vector_new_##type(sl_vector_##type* vector_addr)
-#define impl_sl_vector_new(type)\
-decl_sl_vector_new(type)\
+sl_vector_##type sl_vector_new_##type()
+#define impl_sl_vector_new(type) decl_sl_vector_new(type)\
 {\
-        assert(vector_addr != NULL);\
-        return sl_vector_base_new((sl_vector_base*) vector_addr, sizeof(type));\
+        return (sl_vector_##type) sl_vector_base_new(sizeof(type));\
 }
 
 #define decl_sl_vector_push_back(type)\
 errcode sl_vector_push_back_##type(sl_vector_##type vector, type val)
-#define impl_sl_vector_push_back(type)\
-decl_sl_vector_push_back(type)\
+#define impl_sl_vector_push_back(type) decl_sl_vector_push_back(type)\
 {\
         assert(vector != NULL);\
         sl_vector_base base=(sl_vector_base) vector;\
@@ -109,8 +106,7 @@ decl_sl_vector_push_back(type)\
 
 #define decl_sl_vector_pop(type)\
 errcode sl_vector_pop_##type(sl_vector_##type vector, type* valp)
-#define impl_sl_vector_pop(type)\
-decl_sl_vector_pop(type)\
+#define impl_sl_vector_pop(type) decl_sl_vector_pop(type)\
 {\
         assert(valp != NULL);\
         assert(vector != NULL);\
@@ -124,8 +120,7 @@ decl_sl_vector_pop(type)\
 
 #define decl_sl_vector_as_array(type)\
 type* sl_vector_as_array_##type(sl_vector_##type vector)
-#define impl_sl_vector_as_array(type)\
-decl_sl_vector_as_array(type)\
+#define impl_sl_vector_as_array(type) decl_sl_vector_as_array(type)\
 {\
         assert(vector != NULL);\
         return (type*) sl_vector_base_get_data((sl_vector_base) vector);\
@@ -151,7 +146,7 @@ impl_sl_vector_as_array(type)
 /// Vector Functions
 //////////////////////////////////////////////////
 
-extern errcode sl_vector_base_new(sl_vector_base*, u64 stride);
+extern sl_vector_base sl_vector_base_new(u64 stride);
 extern i32 sl_vector_base_write(sl_vector_base, u64 N, cstring bytes);
 extern cstring sl_vector_base_pop(sl_vector_base, u64 N);
 extern cstring sl_vector_base_get_data(sl_vector_base);
@@ -178,21 +173,21 @@ typedef struct {}* sl_arena;
 /// String Functions
 //////////////////////////////////////////////////
 
-extern errcode sl_string_new(sl_arena, sl_string* dest, cstring src);
-extern errcode sl_string_copy(sl_arena, sl_string* dest, sl_string src);
+extern sl_string sl_string_new(sl_arena, cstring src);
+extern sl_string sl_string_copy(sl_arena, sl_string src);
 extern cstring sl_string_as_cstring(sl_string);
-extern errcode sl_string_format(sl_arena, sl_string* dest, cstring fmt, ...);
-extern errcode sl_create_string_view(sl_arena, sl_string_view*, sl_string base_string, u64 start, u64 end);
+extern sl_string sl_string_format(sl_arena, cstring fmt, ...);
+extern sl_string_view sl_create_string_view(sl_arena, sl_string base_string, u64 start, u64 end);
 
 //////////////////////////////////////////////////
 /// Arena Functions
 //////////////////////////////////////////////////
 
-extern errcode sl_arena_new(sl_arena*);
-extern errcode sl_arena_allocate(sl_arena, object*, u64 bytes);
+extern sl_arena sl_arena_new();
+extern object sl_arena_allocate(sl_arena, u64 bytes);
 extern sl_string_builder sl_arena_create_string_builder(sl_arena);
-extern errcode sl_arena_free(sl_arena);
-extern errcode sl_arena_reset(sl_arena);
+extern void sl_arena_free(sl_arena);
+extern void sl_arena_reset(sl_arena);
 extern errcode _sl_arena_push_back(sl_arena, sl_vector_base);
 #define sl_arena_push_back(arena, vec) _sl_arena_push_back(arena, (sl_vector_base) vec)
 

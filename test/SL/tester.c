@@ -7,11 +7,10 @@
 
 #define sl_vector_len_internal(v) (((sl_vector_base) v)->string.len / ((sl_vector_base) v)->stride)
 
-#define FAIL return EXIT_FAILURE;
 errcode test_vector()
 {
-        sl_vector_i32 vector;
-        errcode e=sl_vector_new_i32(&vector);
+        sl_vector_i32 vector=sl_vector_new_i32();
+        errcode e;
         e |= sl_vector_push_back_i32(vector, 1);
         e |= sl_vector_push_back_i32(vector, 2);
         e |= sl_vector_push_back_i32(vector, 3);
@@ -37,15 +36,14 @@ errcode test_vector()
 errcode test_arena()
 {
         sl_arena arena;
-        errcode e=sl_arena_new(&arena);
-        i64* array;
-        e |= sl_arena_allocate(arena, (void**) &array, sizeof(i64) * 32);
-        for (int i=0, val=1; i < 32; i++, val *= 2) array[i]=val;
+        errcode e;
+        arena=sl_arena_new();
+        i64* array=sl_arena_allocate(arena, sizeof(i64) * 32);
+        for (i64 i=0, val=1; i < 32; i++, val *= 2) array[i]=val;
         sl_vector_base mem=sl_vector_as_array_sl_vector_base(arena)[0];
-        for (int i=0, val=1; i < 32; i++, val *= 2) assert(((i64*) mem->string.data)[i] == val);
-        sl_vector_i64 v;
-        e |= sl_vector_new_i64(&v);
-        for (int i=0, val=1; i < 32; i++, val *= 2) e |= sl_vector_push_back_i64(v, val);
+        for (i64 i=0, val=1; i < 32; i++, val *= 2) assert(((i64*) mem->string.data)[i] == val);
+        sl_vector_i64 v=sl_vector_new_i64();
+        for (i64 i=0, val=1; i < 32; i++, val *= 2) e |= sl_vector_push_back_i64(v, val);
         sl_arena_push_back(arena, v);
         assert(v == (sl_vector_i64) sl_vector_as_array_sl_vector_base(arena)[1]);
         assert(e == EXIT_SUCCESS);
@@ -55,12 +53,13 @@ errcode test_arena()
 errcode test_string()
 {
         sl_arena arena;
-        errcode e=sl_arena_new(&arena);
+        errcode e;
+        arena=sl_arena_new();
         sl_string str1;
-        e |= sl_string_new(arena, &str1, "This is a string!");
+        str1=sl_string_new(arena, "This is a string!");
         printf("str1: (%lu, \"%s\")\n", str1->len, str1->data);
         sl_string str2;
-        e |= sl_string_copy(arena, &str2, str1);
+        str2=sl_string_copy(arena, str1);
         printf("str2: (%lu, \"%s\")\n", str2->len, str2->data);
         sl_string_builder str3_builder=sl_arena_create_string_builder(arena);
         u64* len=&str3_builder->view.view.len;
@@ -68,8 +67,7 @@ errcode test_string()
         *len=sprintf(cstr3, "%s The third to be exact...", str2->data);
         sl_string str3=sl_string_builder_commit(str3_builder);
         printf("str3: (%lu, \"%s\")\n", str3->len, str3->data);
-        sl_string str4;
-        e |= sl_string_format(arena, &str4, "str1: %s, str2: %s, str3: %s", str1->data, str2->data, str3->data);
+        sl_string str4=sl_string_format(arena, "str1: %s, str2: %s, str3: %s", str1->data, str2->data, str3->data);
         cstring test="str1: This is a string!, str2: This is a string!, str3: This is a string! The third to be exact...";
         assert(cstr_eq(str4->data, "str1: This is a string!, str2: This is a string!, str3: This is a string! The third to be exact..."));
         assert(e == EXIT_SUCCESS);

@@ -12,7 +12,7 @@
 
 #define eprintf(fmt,...) fprintf(stderr, fmt, ##__VA_ARGS__)
 #define sl_error_msg(fmt,...) eprintf(__FILE__ ":%d: %s: " fmt "\n", __LINE__, __PRETTY_FUNCTION__, ##__VA_ARGS__)
-#define sl_handle_err(expr,...) if(expr) { __VA_ARGS__ FAIL }
+#define sl_handle_err(expr,...) if(expr) { __VA_ARGS__ return (errcode) EXIT_FAILURE; }
 #define verbose_printf(fmt,...) (FLAGS & 1)? printf(fmt, ##__VA_ARGS__ ):0;
 
 #define KB(n) (1 << 10)

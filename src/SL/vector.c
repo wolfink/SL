@@ -3,7 +3,7 @@
 
 #include "memory.h"
 
-const u64 VEC_SIZE=MB(1);
+const u64 VEC_SIZE=GB(1);
 
 #define FAIL return EXIT_FAILURE;
 
@@ -11,16 +11,16 @@ const u64 VEC_SIZE=MB(1);
         type_table
 #undef SL_TYPE
 
-errcode sl_vector_base_new(sl_vector_base* vector_addr, u64 stride)
+sl_vector_base sl_vector_base_new(u64 stride)
 {
-        assert(vector_addr != NULL);
+        sl_vector_base vector;
+        vector=malloc(sizeof(struct sl_vector_base) + VEC_SIZE);
+        assert(vector != NULL);
 
-        *vector_addr=malloc(sizeof(struct sl_vector_base) + VEC_SIZE);
-        sl_handle_err(*vector_addr == NULL)
-        (*vector_addr)->size=VEC_SIZE;
-        (*vector_addr)->stride=stride;
-        (*vector_addr)->string.len=0;
-        return EXIT_SUCCESS;
+        vector->size=VEC_SIZE;
+        vector->stride=stride;
+        vector->string.len=0;
+        return vector;
 }
 
 i32 sl_vector_base_write(sl_vector_base vector, u64 N, cstring bytes)
