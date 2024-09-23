@@ -31,27 +31,25 @@ const char* tmp_dir=NULL;
 u64 verbose=0;
 
 /* Load a file */
-object sl_load(object);
+object load_file(object);
 /* Generate assembly from SL code. */
-errcode sl_generate(cstring filename);
+errcode generate(cstring filename);
 /* Loads a macro function call into send_argc and send_argv. */
-inline void sl_load_macro_args(macro mp, cstring line);
+inline void load_macro_args(macro mp, cstring line);
 /* Processes a line of input. */
-errcode sl_process_line (FILE* out, cstring line);
+errcode process_line (FILE* out, cstring line);
 /* Create a folder with subfolders. */
-errcode sl_install(cstring file, __mode_t mode);
+errcode install_folder(cstring file, __mode_t mode);
 /* Reads a macro definition. */
-errcode sl_read_macro(FILE* src, cstring line);
+errcode read_macro(FILE* src, cstring line);
+/* Create executable from output code */
+errcode render_executable(cstring out_path, cstring build_cpy_path);
 /* Finds next non-whitespace index. */
-inline i32 sl_skip_whitespace(char* line, int start);
+inline i32 skip_whitespace(char* line, int start);
+/* Display usage message */
+void usage(void);
 
-object sl_load(object vargp)
-{
-        if (sl_generate((cstring) vargp) == EXIT_FAILURE) return NULL;
-        return vargp;
-}
-
-errcode sl_generate(cstring filename)
+errcode generate(cstring filename)
 {
         assert(filename != NULL);
 
@@ -64,7 +62,7 @@ errcode sl_generate(cstring filename)
 
         // Install tmp directories
         sl_string tmp_filedir=sl_string_format(GLOB, "/tmp/sl/%s", filename_no_ext);
-        sl_handle_err(sl_install((cstring) tmp_filedir->data, 0700) == EXIT_FAILURE,
+        sl_handle_err(install_folder((cstring) tmp_filedir->data, 0700) == EXIT_FAILURE,
                 eprintf("error: could not install %s\n", tmp_filedir->data);)
 
         sl_string outfile_name=sl_string_format(GLOB, "%s/out.s", tmp_filedir->data);
@@ -74,39 +72,40 @@ errcode sl_generate(cstring filename)
                 eprintf("error: failed to open %s: %s\n", outfile_name->data, strerror(errno));)
 
         char line[MAX_LINE];
-        i32 lineno;
+        i32 lineno=1;
         // Find a macro, copy its code into a c file
         while (fgets(line, MAX_LINE-1, in) != NULL) {
                 tmp_dir=tmp_filedir->data;
                 // Match lines starting with ## as macro definitions
                 if (line[0] == '#' && line[1] == '#') {
-                        sl_handle_err(sl_read_macro(in, line),
+                        sl_handle_err(read_macro(in, line),
                                 eprintf("%s:%d: error: failed to read macro\n", filename, lineno);)
                 }
                 // Match lines that start with "load" as macro loading
                 else if (strncmp(line, "load", 4) == 0) {
-                        i32 i=sl_skip_whitespace(line, 4);
+                        i32 i=skip_whitespace(line, 4);
                         sl_handle_err(line[i] != '\"', sl_error_msg("expected \'\"\'");)
-                        char* load_filename=strtok(line + i + 1, "\"");
+                        char* load_filenamec=strtok(line + i + 1, "\"");
                         i32 last_slash=0;
                         for (i32 j=0; filename[j] != 0; j++) if (filename[j] == '/') last_slash=j;
                         filename[last_slash] = '\0';
                         sl_string dir=sl_string_new(GLOB, filename);
                         filename[last_slash] = '/';
-                        sl_string load_file=sl_string_format(GLOB, "%s/%s", dir->data, load_filename);
+                        sl_string load_filename=sl_string_format(GLOB, "%s/%s", dir->data, load_filenamec);
                         pthread_t thread_id;
-                        sl_handle_err(pthread_create(&thread_id, NULL, sl_load, (void*) load_file->data),
+                        sl_handle_err(pthread_create(&thread_id, NULL, load_file, (void*) load_filename->data),
                                 sl_error_msg("failed to create pthread");)
                         sl_handle_err(pthread_join(thread_id, NULL),
                                 sl_error_msg("failed to join pthread");)
-                } else assert(sl_process_line(out, line) == EXIT_SUCCESS);
+                } else assert(process_line(out, line) == EXIT_SUCCESS);
+                lineno++;
         }
         sl_handle_err(fclose(out), sl_error_msg("fclose failed: %s", strerror(errno));)
         return EXIT_SUCCESS;
 }
 
 struct stat ST={0};
-errcode sl_install(cstring directory, __mode_t mode)
+errcode install_folder(cstring directory, __mode_t mode)
 {
         assert(directory != NULL);
 
@@ -127,7 +126,13 @@ errcode sl_install(cstring directory, __mode_t mode)
         return EXIT_SUCCESS;
 }
 
-void sl_load_macro_args(macro mp, cstring line)
+object load_file(object vargp)
+{
+        if (generate((cstring) vargp) == EXIT_FAILURE) return NULL;
+        return vargp;
+}
+
+void load_macro_args(macro mp, cstring line)
 {
         assert(mp != NULL);
         assert(line != NULL);
@@ -138,7 +143,7 @@ void sl_load_macro_args(macro mp, cstring line)
         while ((arg=strtok(NULL, " \n")) != NULL);
 }
 
-errcode sl_process_line (FILE* out, cstring line)
+errcode process_line (FILE* out, cstring line)
 {
         assert(out != NULL);
         assert(line != NULL);
@@ -152,7 +157,7 @@ errcode sl_process_line (FILE* out, cstring line)
                         macro mp=sl_vector_as_array_macro(MACRO_LIST)[mli];
                         if (cstr_eq(mp->name->data, word)) {
                                 // Put macro expansion into temporary file, to be read and further expanded
-                                sl_load_macro_args(mp, line);
+                                load_macro_args(mp, line);
                                 sl_handle_err(mp->replace(out, send_argc, send_argv),
                                         sl_error_msg("replace failed for %s", mp->name->data);
                                         eprintf("Arguments:\n");
@@ -171,7 +176,7 @@ errcode sl_process_line (FILE* out, cstring line)
         return EXIT_SUCCESS;
 }
 
-errcode sl_read_macro(FILE* src, cstring line)
+errcode read_macro(FILE* src, cstring line)
 {
         assert(src != NULL);
         assert(line != NULL);
@@ -184,7 +189,7 @@ errcode sl_read_macro(FILE* src, cstring line)
         sl_handle_err(sl_vector_push_back_macro(MACRO_LIST, new_macro))
         sl_string_builder macro_name=sl_arena_create_string_builder(GLOB);
         // Copy macro name (skip "##" at the beginning)
-        i32 i=sl_skip_whitespace(line, 2);
+        i32 i=skip_whitespace(line, 2);
         i32 j=0;
         while (isalnum(line[i]) || line[i] == '_') {
                 macro_name->string[j++]=line[i++];
@@ -222,21 +227,8 @@ errcode sl_read_macro(FILE* src, cstring line)
                 }
                 fputs(line, temp);
         }
-        eprintf("macro must end with \"##\"\n");
+        eprintf("error: macro must end with \"##\"\n");
         return EXIT_FAILURE;
-}
-
-i32 sl_skip_whitespace(cstring line, i32 start)
-{
-        i32 i=start - 1;
-        while(iswspace(line[++i]));
-        return i;
-}
-
-void usage()
-{
-        printf("Usage: sl [OPTION] FILES ...\n");
-        exit(EXIT_FAILURE);
 }
 
 errcode render_executable(cstring out_path, cstring build_cpy_path)
@@ -279,6 +271,19 @@ errcode render_executable(cstring out_path, cstring build_cpy_path)
         return execvp(command[0], command);
 }
 
+i32 skip_whitespace(cstring line, i32 start)
+{
+        i32 i=start - 1;
+        while(iswspace(line[++i]));
+        return i;
+}
+
+void usage()
+{
+        printf("Usage: sl [OPTION] FILES ...\n");
+        exit(EXIT_FAILURE);
+}
+
 errcode main(i32 argc, cstring* argv)
 {
         // Initialize constants
@@ -291,12 +296,12 @@ errcode main(i32 argc, cstring* argv)
 
         // Parse arguments
         if (argc < 2) usage();
-        for (i32 i=0; i < argc; i++) {
+        for (i32 i=1; i < argc; i++) {
                 if (cstr_eq(argv[i], "-o")) out_path=argv[++i];
                 else if (cstr_eq(argv[i], "-v")) verbose=1;
                 else if (cstr_eq(argv[i], "--copy-build-files")) build_cpy_path=argv[++i];
                 else if (argv[i][0] == '-') eprintf("error: option \"%s\" not recognized\n", argv[i]);
-                else sl_handle_err(sl_load(argv[i]) == NULL,
+                else sl_handle_err(load_file(argv[i]) == NULL,
                         eprintf("error: failed to load %s\n", argv[i]);)
         }
         assert(tmp_dir != NULL);
