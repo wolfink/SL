@@ -28,6 +28,7 @@ i32 send_argc;
 char send_argv_buffer[MAX_ARGS][MAX_LINE];
 cstring send_argv[MAX_ARGS];
 const char* tmp_dir=NULL;
+u64 verbose=0;
 
 /* Load a file */
 object sl_load(object);
@@ -56,30 +57,31 @@ errcode sl_generate(cstring filename)
 
         FILE* in=fopen(filename, "r");
         sl_handle_err(in == NULL,
-                sl_error_msg("failed to open %s: %s", filename, strerror(errno));)
+                eprintf("error: failed to open %s: %s\n", filename, strerror(errno));)
         char* filename_no_ext=strtok(filename, ".");
         sl_handle_err (filename_no_ext == NULL,
-                sl_error_msg("filename has no body");)
+                eprintf("error: filename has no body\n");)
 
         // Install tmp directories
         sl_string tmp_filedir=sl_string_format(GLOB, "/tmp/sl/%s", filename_no_ext);
         sl_handle_err(sl_install((cstring) tmp_filedir->data, 0700) == EXIT_FAILURE,
-                sl_error_msg("could not install %s", tmp_filedir->data);)
+                eprintf("error: could not install %s\n", tmp_filedir->data);)
 
         sl_string outfile_name=sl_string_format(GLOB, "%s/out.s", tmp_filedir->data);
 
         FILE* out=fopen(outfile_name->data, "w");
         sl_handle_err(out == NULL,
-                sl_error_msg("failed to open %s: %s", outfile_name->data, strerror(errno));)
+                eprintf("error: failed to open %s: %s\n", outfile_name->data, strerror(errno));)
 
         char line[MAX_LINE];
+        i32 lineno;
         // Find a macro, copy its code into a c file
         while (fgets(line, MAX_LINE-1, in) != NULL) {
                 tmp_dir=tmp_filedir->data;
                 // Match lines starting with ## as macro definitions
                 if (line[0] == '#' && line[1] == '#') {
                         sl_handle_err(sl_read_macro(in, line),
-                                sl_error_msg("failed to read macro");)
+                                eprintf("%s:%d: error: failed to read macro\n", filename, lineno);)
                 }
                 // Match lines that start with "load" as macro loading
                 else if (strncmp(line, "load", 4) == 0) {
@@ -120,7 +122,7 @@ errcode sl_install(cstring directory, __mode_t mode)
         }
         if (stat(directory, &ST) == -1) {
                 sl_handle_err(mkdir(directory, mode),
-                        sl_error_msg("failed to create directory %s: %s\n", directory, strerror(errno));)
+                        eprintf("error: failed to create directory %s: %s\n", directory, strerror(errno));)
         }
         return EXIT_SUCCESS;
 }
@@ -233,33 +235,70 @@ i32 sl_skip_whitespace(cstring line, i32 start)
 
 void usage()
 {
-        printf("usage: sl file1 [file2] ...\n");
+        printf("Usage: sl [OPTION] FILES ...\n");
+        exit(EXIT_FAILURE);
+}
+
+errcode render_executable(cstring out_path, cstring build_cpy_path)
+{
+        errcode e;
+        sl_string as_file;
+        sl_string o_file;
+        as_file=sl_string_format(GLOB, "%s/out.s", tmp_dir);
+        o_file=sl_string_format(GLOB, "%s/out.o", tmp_dir);
+        pid_t p=fork();
+        if (p == 0) {
+                cstring command[]={"as", (cstring) as_file->data, "-o", (cstring) o_file->data, NULL};
+                sl_handle_err(execvp(command[0], command),
+                        sl_error_msg("failed to execute command (%s):", strerror(errno));
+                        for (i32 i=0; i < sizeof(command) / sizeof(cstring); i++) eprintf("%s ", command[i]);
+                        eprintf("\n");)
+        }
+        sl_handle_err(wait(NULL) == -1, sl_error_msg("child process failed");)
+        p=fork();
+        if (p == 0) {
+                cstring command[]={"ld", (char*) o_file->data, "-o", out_path, NULL};
+                sl_handle_err(execvp(command[0], command),
+                        sl_error_msg("failed to execute command (%s):", strerror(errno));
+                        for (i32 i=0; i < sizeof(command) / sizeof(cstring); i++) eprintf("%s ", command[i]);
+                        eprintf("\n");)
+        }
+        sl_handle_err(wait(NULL) == -1, sl_error_msg("child process failed");)
+        if (build_cpy_path) {
+                pid_t p=fork();
+                if (p == 0) {
+                        cstring command[]={"cp", "-r", "/tmp/sl", build_cpy_path, NULL};
+                        errcode _=execvp(command[0], command);
+                        sl_error_msg("failed to execute command (%s):", strerror(errno));
+                        for (i32 i=0; i < sizeof(command) / sizeof(cstring); i++) eprintf("%s ", command[i]);
+                        eprintf("\n");
+                }
+                sl_handle_err(wait(NULL) == -1, sl_error_msg("child process failed");)
+        }
+        cstring command[]={"rm", "-rf", "/tmp/sl", NULL};
+        return execvp(command[0], command);
 }
 
 errcode main(i32 argc, cstring* argv)
 {
+        // Initialize constants
         GLOB=sl_arena_new();
         MACRO_LIST=sl_vector_new_macro();
-        sl_string as_file;
-        sl_string o_file;
-        errcode e;
-        sl_handle_err(argc < 2, usage();)
-        sl_handle_err(sl_load(argv[1]) == NULL,
-                sl_error_msg("failed to load %s", argv[1]);)
-        sl_handle_err(tmp_dir == NULL)
 
-        as_file=sl_string_format(GLOB, "%s/out.s", tmp_dir);
-        o_file=sl_string_format(GLOB, "%s/out.o", tmp_dir);
-        sl_handle_err(e, sl_error_msg("failed to initialize o_file");)
-        pid_t p=fork();
-        if (p == 0) {
-                cstring command[]={"as", (cstring) as_file->data, "-o", (cstring) o_file->data};
-                sl_handle_err(execvp(command[0], command),
-                        sl_error_msg("failed to execute command (%s):", strerror(errno));
-                        for (int i=0; i < sizeof(command) / sizeof(cstring); i++) eprintf("%s ", command[i]);
-                        eprintf("\n");)
+        errcode e;
+        cstring out_path="a.out";
+        cstring build_cpy_path=NULL;
+
+        // Parse arguments
+        if (argc < 2) usage();
+        for (i32 i=0; i < argc; i++) {
+                if (cstr_eq(argv[i], "-o")) out_path=argv[++i];
+                else if (cstr_eq(argv[i], "-v")) verbose=1;
+                else if (cstr_eq(argv[i], "--copy-build-files")) build_cpy_path=argv[++i];
+                else if (argv[i][0] == '-') eprintf("error: option \"%s\" not recognized\n", argv[i]);
+                else sl_handle_err(sl_load(argv[i]) == NULL,
+                        eprintf("error: failed to load %s\n", argv[i]);)
         }
-        sl_handle_err(wait(NULL) == -1, sl_error_msg("child process failed");)
-        cstring command[]={"ld", (char*) o_file->data, "-o", "a.out"};
-        execvp(command[0], command);
+        assert(tmp_dir != NULL);
+        return render_executable(out_path, build_cpy_path);
 }
