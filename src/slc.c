@@ -15,13 +15,13 @@
 #include <assert.h>
 #include <errno.h>
 
-typedef struct macro {
+typedef struct sl_object {
         sl_string name;
         int (*prologue)();
         int (*replace)(FILE*, int argc, char** argv);
-}* macro;
-decl_sl_vector(macro)
-impl_sl_vector(macro)
+}* sl_object;
+decl_sl_vector(sl_object)
+impl_sl_vector(sl_object)
 
 typedef struct line_node {
         u64 next;
@@ -33,25 +33,25 @@ decl_sl_vector(line_node)
 impl_sl_vector(line_node)
 
 sl_arena GLOB;
-sl_vector_macro MACRO_LIST;
+sl_vector_sl_object OBJECT_LIST;
 i32 send_argc;
 char send_argv_buffer[MAX_ARGS][MAX_LINE];
 cstring send_argv[MAX_ARGS];
 const char* tmp_dir=NULL;
 u64 verbose=0;
 
-/* Load a file */
-object load_file(object);
 /* Generate assembly from SL code. */
 errcode generate(cstring filename);
-/* Loads a macro function call into send_argc and send_argv. */
-inline void load_macro_args(macro mp, cstring line);
+/* Load a file */
+object load_file(object);
+/* Loads an object function call into send_argc and send_argv. */
+inline void load_object_args(sl_object mp, cstring line);
 /* Processes a line of input. */
 errcode process_line (sl_vector_line_node, u64 index);
 /* Create a folder with subfolders. */
 errcode install_folder(cstring file, __mode_t mode);
-/* Reads a macro definition. */
-errcode read_macro(FILE* src, cstring line);
+/* Reads an object definition. */
+errcode read_object(FILE* src, cstring line);
 /* Create executable from output code */
 errcode render_executable(cstring out_path, cstring build_cpy_path);
 /* Finds next non-whitespace index. */
@@ -88,7 +88,7 @@ errcode generate(cstring filename)
         for (u64 i=1; fgets(line, MAX_LINE-1, in) != NULL; i++) {
                 // Match lines starting with ## as macro definitions
                 if (line[0] == '#' && line[1] == '#') {
-                        sl_handle_err(read_macro(in, line),
+                        sl_handle_err(read_object(in, line),
                                 eprintf("%s:%lu: error: failed to read macro\n", filename, i);)
                 } else if (strncmp(line, "load", 4) == 0) {
                         i32 i=skip_whitespace(line, 4);
@@ -162,7 +162,7 @@ object load_file(object vargp)
         return vargp;
 }
 
-void load_macro_args(macro mp, cstring line)
+void load_object_args(sl_object mp, cstring line)
 {
         assert(mp != NULL);
         assert(line != NULL);
@@ -188,11 +188,11 @@ errcode process_line (sl_vector_line_node v, u64 index)
         do {
                 u64 wordlen=strlen(word);
                 // If there is a macro, check if word matches macro
-                if (sl_vector_len(MACRO_LIST) > 0) for (int mli=0; mli < sl_vector_len(MACRO_LIST); mli++) {
-                        macro mp=sl_vector_as_array_macro(MACRO_LIST)[mli];
+                if (sl_vector_len(OBJECT_LIST) > 0) for (int mli=0; mli < sl_vector_len(OBJECT_LIST); mli++) {
+                        sl_object mp=sl_vector_as_array_sl_object(OBJECT_LIST)[mli];
                         if (cstr_eq(mp->name->data, word)) {
                                 // Put macro expansion into temporary file, to be read and further expanded
-                                load_macro_args(mp, linec);
+                                load_object_args(mp, linec);
                                 sl_handle_err(mp->replace(tmp, send_argc, send_argv),
                                         sl_error_msg("replace failed for %s", mp->name->data);
                                         eprintf("Arguments:\n");
@@ -231,34 +231,34 @@ write_lines:
         return EXIT_SUCCESS;
 }
 
-errcode read_macro(FILE* src, cstring line)
+errcode read_object(FILE* src, cstring line)
 {
         assert(src != NULL);
         assert(line != NULL);
         assert(tmp_dir != NULL);
 
         FILE* temp;
-        // Create macro
-        macro new_macro=sl_arena_allocate(GLOB, sizeof(struct macro));
+        // Create object
+        sl_object new_sl_object=sl_arena_allocate(GLOB, sizeof(struct sl_object));
         errcode e;
-        sl_handle_err(sl_vector_push_back_macro(MACRO_LIST, new_macro))
-        sl_string_builder macro_name=sl_arena_create_string_builder(GLOB);
-        // Copy macro name (skip "##" at the beginning)
+        sl_handle_err(sl_vector_push_back_sl_object(OBJECT_LIST, new_sl_object))
+        sl_string_builder sl_object_name=sl_arena_create_string_builder(GLOB);
+        // Copy object name (skip "##" at the beginning)
         i32 i=skip_whitespace(line, 2);
         i32 j=0;
         while (isalnum(line[i]) || line[i] == '_') {
-                macro_name->string[j++]=line[i++];
+                sl_object_name->string[j++]=line[i++];
         }
-        macro_name->len=j;
-        new_macro->name=sl_string_builder_commit(macro_name);
-        // Open macro temp file
-        sl_string temp_name=sl_string_format(GLOB, "%s/%s.c", tmp_dir, new_macro->name->data);
-        sl_handle_err(e, sl_error_msg("failed to set filename for macro: %s", new_macro->name->data);)
+        sl_object_name->len=j;
+        new_sl_object->name=sl_string_builder_commit(sl_object_name);
+        // Open object temp file
+        sl_string temp_name=sl_string_format(GLOB, "%s/%s.c", tmp_dir, new_sl_object->name->data);
+        sl_handle_err(e, sl_error_msg("failed to set filename for object: %s", new_sl_object->name->data);)
         temp=fopen(temp_name->data, "w");
-        sl_handle_err(temp == NULL, sl_error_msg("could not open macro file: %s", strerror(errno));)
+        sl_handle_err(temp == NULL, sl_error_msg("could not open object file: %s", strerror(errno));)
         while (fgets(line, MAX_LINE-1, src) != NULL) {
                 if (line[0] == '#' && line[1] == '#') {
-                        macro m=sl_vector_as_array_macro(MACRO_LIST)[sl_vector_len(MACRO_LIST)-1];
+                        sl_object m=sl_vector_as_array_sl_object(OBJECT_LIST)[sl_vector_len(OBJECT_LIST)-1];
                         sl_string tempso_name=sl_string_format(GLOB, "%s/%s.so", tmp_dir, m->name->data);
 
                         sl_handle_err(fclose(temp), sl_error_msg("failed to close file: %s", temp_name->data);)
@@ -282,7 +282,7 @@ errcode read_macro(FILE* src, cstring line)
                 }
                 fputs(line, temp);
         }
-        eprintf("error: macro must end with \"##\"\n");
+        eprintf("error: object must end with \"##\"\n");
         return EXIT_FAILURE;
 }
 
@@ -343,7 +343,7 @@ errcode main(i32 argc, cstring* argv)
 {
         // Initialize constants
         GLOB=sl_arena_new();
-        MACRO_LIST=sl_vector_new_macro();
+        OBJECT_LIST=sl_vector_new_sl_object();
 
         errcode e;
         cstring out_path="a.out";
