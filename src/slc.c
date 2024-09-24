@@ -1,5 +1,6 @@
 #include "SL/SL.h"
 #include "SL/macros.h"
+#include "SL/memory.h"
 #include "SL/types.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -22,6 +23,15 @@ typedef struct macro {
 decl_sl_vector(macro)
 impl_sl_vector(macro)
 
+typedef struct line_node {
+        u64 next;
+        u64 prev;
+        sl_string line;
+        u64 lineno;
+} line_node;
+decl_sl_vector(line_node)
+impl_sl_vector(line_node)
+
 sl_arena GLOB;
 sl_vector_macro MACRO_LIST;
 i32 send_argc;
@@ -37,7 +47,7 @@ errcode generate(cstring filename);
 /* Loads a macro function call into send_argc and send_argv. */
 inline void load_macro_args(macro mp, cstring line);
 /* Processes a line of input. */
-errcode process_line (FILE* out, cstring line);
+errcode process_line (sl_vector_line_node, u64 index);
 /* Create a folder with subfolders. */
 errcode install_folder(cstring file, __mode_t mode);
 /* Reads a macro definition. */
@@ -45,7 +55,7 @@ errcode read_macro(FILE* src, cstring line);
 /* Create executable from output code */
 errcode render_executable(cstring out_path, cstring build_cpy_path);
 /* Finds next non-whitespace index. */
-inline i32 skip_whitespace(char* line, int start);
+inline i32 skip_whitespace(const char* line, int start);
 /* Display usage message */
 void usage(void);
 
@@ -67,22 +77,20 @@ errcode generate(cstring filename)
 
         sl_string outfile_name=sl_string_format(GLOB, "%s/out.s", tmp_filedir->data);
 
-        FILE* out=fopen(outfile_name->data, "w");
-        sl_handle_err(out == NULL,
-                eprintf("error: failed to open %s: %s\n", outfile_name->data, strerror(errno));)
-
+        // Populate line vector with input
+        sl_vector_line_node out_vec=sl_vector_new_line_node();
+        line_node* out_vec_ptr=sl_vector_as_array_line_node(out_vec);
+        sl_arena_push_back(GLOB, out_vec);
         char line[MAX_LINE];
-        i32 lineno=1;
-        // Find a macro, copy its code into a c file
-        while (fgets(line, MAX_LINE-1, in) != NULL) {
-                tmp_dir=tmp_filedir->data;
+        line_node new_line={0, 0, NULL, 0 };
+        sl_vector_push_back_line_node(out_vec, new_line);
+        tmp_dir=tmp_filedir->data;
+        for (u64 i=1; fgets(line, MAX_LINE-1, in) != NULL; i++) {
                 // Match lines starting with ## as macro definitions
                 if (line[0] == '#' && line[1] == '#') {
                         sl_handle_err(read_macro(in, line),
-                                eprintf("%s:%d: error: failed to read macro\n", filename, lineno);)
-                }
-                // Match lines that start with "load" as macro loading
-                else if (strncmp(line, "load", 4) == 0) {
+                                eprintf("%s:%lu: error: failed to read macro\n", filename, i);)
+                } else if (strncmp(line, "load", 4) == 0) {
                         i32 i=skip_whitespace(line, 4);
                         sl_handle_err(line[i] != '\"', sl_error_msg("expected \'\"\'");)
                         char* load_filenamec=strtok(line + i + 1, "\"");
@@ -97,9 +105,31 @@ errcode generate(cstring filename)
                                 sl_error_msg("failed to create pthread");)
                         sl_handle_err(pthread_join(thread_id, NULL),
                                 sl_error_msg("failed to join pthread");)
-                } else assert(process_line(out, line) == EXIT_SUCCESS);
-                lineno++;
+                        tmp_dir=tmp_filedir->data;
+                } else {
+                        const u64 pos=sl_vector_len(out_vec);
+                        new_line=(line_node){0, pos - 1, sl_string_new(GLOB, line), i };
+                        out_vec_ptr[new_line.prev].next=pos;
+                        sl_vector_push_back_line_node(out_vec, new_line);
+                }
         }
+        sl_handle_err(fclose(in), sl_error_msg("fclose failed: %s", strerror(errno));)
+
+        if (sl_vector_len(out_vec) == 1) return EXIT_SUCCESS;
+
+        for (u64 i=1; i != 0; i=out_vec_ptr[i].next) {
+                sl_handle_err(process_line(out_vec, i), eprintf("%s:%lu: error: failed to process line", filename, i);)
+        }
+
+        FILE* out=fopen(outfile_name->data, "w");
+        sl_handle_err(out == NULL,
+                eprintf("error: failed to open %s: %s\n", outfile_name->data, strerror(errno));)
+
+        for (u64 i=1; i != 0; i=out_vec_ptr[i].next) {
+                line_node* line_arr=sl_vector_as_array_line_node(out_vec);
+                fputs(line_arr[i].line->data, out);
+        }
+
         sl_handle_err(fclose(out), sl_error_msg("fclose failed: %s", strerror(errno));)
         return EXIT_SUCCESS;
 }
@@ -143,12 +173,17 @@ void load_macro_args(macro mp, cstring line)
         while ((arg=strtok(NULL, " \n")) != NULL);
 }
 
-errcode process_line (FILE* out, cstring line)
+errcode process_line (sl_vector_line_node v, u64 index)
 {
-        assert(out != NULL);
-        assert(line != NULL);
+        FILE* tmp=tmpfile();
+        assert(tmp != NULL);
 
-        cstring word=strtok(line, " \n");
+        line_node *const nodes_arr=sl_vector_as_array_line_node(v);
+        line_node *const start=&nodes_arr[index];
+        const u64 lineno=start->lineno;
+        char linec[MAX_LINE];
+        strcpy(linec, start->line->data);
+        cstring word=strtok(linec, " \n");
         if (word == NULL) return EXIT_SUCCESS;
         do {
                 u64 wordlen=strlen(word);
@@ -157,22 +192,42 @@ errcode process_line (FILE* out, cstring line)
                         macro mp=sl_vector_as_array_macro(MACRO_LIST)[mli];
                         if (cstr_eq(mp->name->data, word)) {
                                 // Put macro expansion into temporary file, to be read and further expanded
-                                load_macro_args(mp, line);
-                                sl_handle_err(mp->replace(out, send_argc, send_argv),
+                                load_macro_args(mp, linec);
+                                sl_handle_err(mp->replace(tmp, send_argc, send_argv),
                                         sl_error_msg("replace failed for %s", mp->name->data);
                                         eprintf("Arguments:\n");
                                         for (int i=0; i < send_argc; i++) {
                                                 eprintf("  (%d) %s\n", i, send_argv[i]);
                                         })
-                                return EXIT_SUCCESS;
+                                goto write_lines;
                         }
                 }
                 // If no macros are matched, put word, with a space
-                fputs(word, out);
-                putc(' ', out);
+                fputs(word, tmp);
+                putc(' ', tmp);
         } while ((word=strtok(NULL, " \n")) != NULL);
-        putc('\n', out);
+        putc('\n', tmp);
 
+write_lines:
+        assert(fseek(tmp, 0, SEEK_SET) == EXIT_SUCCESS);
+        // Replace input line with first line of output
+        if (fgets(linec, MAX_LINE-1, tmp) != NULL) {
+                start->line=sl_string_new(GLOB, linec);
+        }
+        // Add further line_node's to linked list
+        u64 i=index;
+        line_node* node_prev=start;
+        while(fgets(linec, MAX_LINE-1, tmp) != NULL) {
+                sl_vector_push_back_line_node(v,
+                        (line_node) {
+                                node_prev->next,
+                                i,
+                                sl_string_new(GLOB, linec),
+                                lineno});
+                i=node_prev->next=sl_vector_len(v) - 1;
+                node_prev=&nodes_arr[i];
+        }
+        fclose(tmp);
         return EXIT_SUCCESS;
 }
 
@@ -271,7 +326,7 @@ errcode render_executable(cstring out_path, cstring build_cpy_path)
         return execvp(command[0], command);
 }
 
-i32 skip_whitespace(cstring line, i32 start)
+i32 skip_whitespace(const char* line, i32 start)
 {
         i32 i=start - 1;
         while(iswspace(line[++i]));
